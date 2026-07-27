@@ -180,6 +180,10 @@
     // agentStart / next user message; the card itself stays in the transcript.
     turnEditsByToolCallId: new Map(),
     turnDiffSummaryEl: null,
+    // Host turn id (agentStart.turnId) + baseline *metadata* per turn (content
+    // stays on the host). Powers View deleted / Undo on the summary card.
+    currentTurnId: 0,
+    baselineMetaByTurn: new Map(), // turnId → [{ path, kind, reason? }]
     // Restored question cards on resume (toolCallId → card element). On replay grok
     // sends a tool_call per question (with rawInput.questions); we render the card
     // immediately and fill the answer in whenever it arrives — on the tool_call
@@ -2308,6 +2312,8 @@
     state.turnAgentActionsEl = null;
     state.turnEditsByToolCallId.clear();
     state.turnDiffSummaryEl = null;
+    state.currentTurnId = 0;
+    state.baselineMetaByTurn.clear();
     state.activeAgentEl = null;
     state.activeAgentRaw = "";
     state.activeUserEl = null;
@@ -2677,6 +2683,36 @@
     }
   }
 
+  function baselineKey(p) {
+    return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
+  /** Find host baseline meta for a summary path (case/slash-insensitive). */
+  function baselineMetaForPath(turnId, filePath) {
+    const files = state.baselineMetaByTurn.get(turnId);
+    if (!files || !files.length) return null;
+    const want = baselineKey(filePath);
+    const wantBase = want.split("/").pop();
+    let hit = files.find((f) => baselineKey(f.path) === want);
+    if (hit) return hit;
+    // Wire paths may be abs vs relative — match on basename as fallback.
+    if (wantBase) hit = files.find((f) => baselineKey(f.path).split("/").pop() === wantBase);
+    return hit || null;
+  }
+
+  function makeTurnActionBtn(label, title, onClick) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "turn-diff-action";
+    btn.textContent = label;
+    btn.title = title;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      onClick();
+    };
+    return btn;
+  }
+
   function refreshTurnDiffSummaryUi() {
     const agg = aggregateTurnEdits(state.turnEditsByToolCallId.values());
     if (!agg.files.length) {
@@ -2694,6 +2730,8 @@
       el.setAttribute("aria-label", "Files changed this turn");
       state.turnDiffSummaryEl = el;
     }
+    const turnId = state.currentTurnId || 0;
+    el.dataset.turnId = String(turnId);
     while (el.firstChild) el.removeChild(el.firstChild);
 
     const hdr = document.createElement("div");
@@ -2706,38 +2744,80 @@
       hdr.appendChild(document.createTextNode(" · "));
       hdr.appendChild(makeDiffStat(agg.totalAdded, agg.totalRemoved));
     }
+    const hdrActions = document.createElement("span");
+    hdrActions.className = "turn-diff-summary-actions";
+    // Undo all when the host has any baseline for this turn.
+    const baselined = state.baselineMetaByTurn.get(turnId);
+    if (turnId && baselined && baselined.length && !IS_REMOTE) {
+      hdrActions.appendChild(
+        makeTurnActionBtn("Undo all", "Restore every file changed this turn to its pre-turn state", () => {
+          vscode.postMessage({ type: "undoTurnFiles", turnId });
+        }),
+      );
+    }
+    hdr.appendChild(hdrActions);
     el.appendChild(hdr);
 
     const list = document.createElement("div");
     list.className = "turn-diff-summary-list";
     for (const f of agg.files) {
       const isDel = f.action === "deleted";
-      const row = document.createElement(f.openDiff && !isDel ? "button" : "div");
-      row.className = "turn-diff-file"
-        + (f.openDiff && !isDel ? " has-diff" : "")
-        + (isDel ? " is-deleted" : "");
+      const row = document.createElement("div");
+      row.className = "turn-diff-file" + (isDel ? " is-deleted" : "");
+      if (f.path) row.dataset.path = f.path;
+
+      const name = document.createElement(
+        f.openDiff && !isDel ? "button" : "span",
+      );
+      name.className = "turn-diff-file-path" + (f.openDiff && !isDel ? " has-diff" : "");
+      name.textContent = turnEditDisplayPath(f.path);
+      if (f.path) name.title = f.path;
       if (f.openDiff && !isDel) {
-        row.type = "button";
-        row.title = "Open diff";
+        name.type = "button";
+        name.title = (f.path || "") + " — open diff";
         const payload = f.openDiff;
-        row.onclick = (e) => {
+        name.onclick = (e) => {
           e.stopPropagation();
           vscode.postMessage(payload);
         };
       }
-      const name = document.createElement("span");
-      name.className = "turn-diff-file-path";
-      name.textContent = turnEditDisplayPath(f.path);
-      if (f.path) name.title = f.path;
       row.appendChild(name);
+
+      const right = document.createElement("span");
+      right.className = "turn-diff-file-right";
       if (isDel) {
         const tag = document.createElement("span");
         tag.className = "turn-diff-file-action deleted";
         tag.textContent = "Deleted";
-        row.appendChild(tag);
+        right.appendChild(tag);
       } else {
-        row.appendChild(makeDiffStat(f.added, f.removed));
+        right.appendChild(makeDiffStat(f.added, f.removed));
       }
+
+      if (turnId && !IS_REMOTE) {
+        const meta = baselineMetaForPath(turnId, f.path);
+        if (meta && (meta.kind === "content" || isDel)) {
+          if (isDel && meta.kind === "content") {
+            right.appendChild(
+              makeTurnActionBtn("View", "Show the file content from before it was deleted", () => {
+                vscode.postMessage({ type: "viewTurnBaseline", turnId, path: meta.path || f.path });
+              }),
+            );
+          }
+          if (meta.kind === "content" || meta.kind === "absent") {
+            right.appendChild(
+              makeTurnActionBtn("Undo", "Restore this file to its pre-turn state", () => {
+                vscode.postMessage({
+                  type: "undoTurnFiles",
+                  turnId,
+                  paths: [meta.path || f.path],
+                });
+              }),
+            );
+          }
+        }
+      }
+      row.appendChild(right);
       list.appendChild(row);
     }
     el.appendChild(list);
@@ -6205,6 +6285,11 @@
         // previous card on a live send; this also covers afterTurn follow-ups
         // that emit agentStart without a new user bubble).
         startTurnDiffTracking();
+        if (typeof msg.turnId === "number" && msg.turnId > 0) {
+          state.currentTurnId = msg.turnId;
+        } else {
+          state.currentTurnId = (state.currentTurnId || 0) + 1; // older hosts
+        }
         showGrokking();
         // Busy is event-sourced through the session buffer so a re-focus lands
         // on the true state: agentStart marks a turn in flight (a live send
@@ -6213,6 +6298,18 @@
         state.busy = true;
         state.busyLocked = false;
         updateSendButton();
+        break;
+      case "turnBaselines":
+        // Host first-touch snapshots (meta only). Refresh the live summary so
+        // View / Undo buttons appear as files are baselined.
+        if (typeof msg.turnId === "number" && Array.isArray(msg.files)) {
+          state.baselineMetaByTurn.set(msg.turnId, msg.files);
+          if (state.turnDiffSummaryEl && state.currentTurnId === msg.turnId) {
+            refreshTurnDiffSummaryUi();
+          } else if (state.turnDiffSummaryEl && String(state.turnDiffSummaryEl.dataset.turnId) === String(msg.turnId)) {
+            refreshTurnDiffSummaryUi();
+          }
+        }
         break;
       case "thoughtChunk":
         appendThought(msg.text);

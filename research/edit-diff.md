@@ -81,10 +81,17 @@ in that turn. Pure client aggregation — no disk re-diff, no new ACP surface.
   the last). `openDiff` spans **first.oldText → last.newText** so the native
   editor shows the whole turn (batch-1 content included), not only the last
   region. A delete after edits wins; an edit after a delete recreates the row.
+- **Host baselines (view deleted / undo):** first-touch snapshot per path for
+  the open turn (`src/file-baseline.ts`). Captured on `fs/write_text_file`
+  (before write) and on `terminal/create` for shell deletes (sync read before
+  spawn). Content stays host-side; webview gets `turnBaselines` meta keyed by
+  `agentStart.turnId`. UI: **View** on deleted rows, **Undo** per file, **Undo
+  all** on the card. Restore writes baseline content or deletes a created file.
 - **Live / restore / click:** same as before (card pins at turn end; restore
-  rebuilds from completed `tool_call`s; click posts `openDiff`).
+  rebuilds from completed `tool_call`s; path click posts `openDiff`).
 - **Out of scope:** non-delete shell mutations (`sed`, `mv`, redirects),
-  subagent child edits, LLM prose "what changed".
+  subagent child edits, LLM prose "what changed", per-file restore via CLI
+  rewind (no single-path RPC).
 
 ## Tests
 

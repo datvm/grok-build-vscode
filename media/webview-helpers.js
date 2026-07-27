@@ -17,7 +17,7 @@
     "initialState", "showThinking", "fontScale", "grokUpdateStatus", "initialized",
     "cliUpdating", "session", "modelChanged", "modeChanged", "openModePopover",
     "voiceState", "voiceConfigured", "voicePartial", "voiceSubmit", "voiceTranscript",
-    "voiceError", "chips", "commandsUpdate", "mentionResults", "userMessage", "agentStart", "thoughtChunk",
+    "voiceError", "chips", "commandsUpdate", "mentionResults", "userMessage", "agentStart", "turnBaselines", "thoughtChunk",
     "messageChunk", "media", "userMessageChunk", "historyReplay", "permissionHistoryQueue",
     "planHistoryQueue", "planProcessing", "toolCall", "toolCallUpdate", "permissionRequest",
     "permissionResolved", "exitPlanRequest", "planResolved", "questionRequest", "planNotice", "autoCompactNotice", "planBlocked",
@@ -28,7 +28,7 @@
   ];
   const WEBVIEW_MESSAGE_TYPES = [
     "ready", "send", "newSession", "cancel", "pickModel", "setMode", "removeChip",
-    "toggleChip", "openFile", "openUrl", "openText", "openDiff", "exportExpr", "setEffort",
+    "toggleChip", "openFile", "openUrl", "openText", "openDiff", "viewTurnBaseline", "undoTurnFiles", "exportExpr", "setEffort",
     "openGlobalConfig", "openProjectConfig", "runMcpList", "showLogs", "moveView",
     "setShowThinking", "setExpandCommandOutputs",
     "dropFile", "permissionAnswer", "exitPlanAnswer", "questionAnswer", "questionCancel",

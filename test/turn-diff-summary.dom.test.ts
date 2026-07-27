@@ -31,6 +31,12 @@ function rowByPath(doc: Document, re: RegExp) {
   ) as HTMLElement | undefined;
 }
 
+/** openDiff is on the path control, not the whole row (row holds Undo/View). */
+function clickOpenDiff(window: Window, row: HTMLElement) {
+  const pathBtn = row.querySelector(".turn-diff-file-path.has-diff") as HTMLElement | null;
+  click(window, pathBtn || row);
+}
+
 describe("turn-level file change summary", () => {
   it("lists every edited file with path-deduped totals and opens the native diff", () => {
     const { window, doc, posted } = bootWebview();
@@ -61,7 +67,7 @@ describe("turn-level file change summary", () => {
     expect(rows[0].querySelector(".diff-stat-del")!.textContent).toBe("−2");
     expect(rows[1].querySelector(".turn-diff-file-path")!.textContent).toBe("src/b.ts");
 
-    click(window, rows[0] as HTMLElement);
+    clickOpenDiff(window, rows[0] as HTMLElement);
     const opens = posted.filter((m: any) => m.type === "openDiff");
     expect(opens).toHaveLength(1);
     expect(opens[0]).toMatchObject({ path: "src/a.ts", oldText: "x", newText: "yz" });
@@ -83,7 +89,7 @@ describe("turn-level file change summary", () => {
       expect(rows[0].querySelector(".diff-stat-add")!.textContent).toBe("+6");
       expect(rows[0].querySelector(".diff-stat-del")!.textContent).toBe("−3");
 
-      click(window, rows[0] as HTMLElement);
+      clickOpenDiff(window, rows[0] as HTMLElement);
       const opens = posted.filter((m: any) => m.type === "openDiff");
       expect(opens[0]).toMatchObject({ oldText: "", newText: "A\nB\nC" });
     });
@@ -106,7 +112,7 @@ describe("turn-level file change summary", () => {
       const row = rowByPath(doc, /F3\.txt/)!;
       expect(row.querySelector(".diff-stat-add")!.textContent).toBe("+3");
       expect(row.querySelector(".diff-stat-del")!.textContent).toBe("−0");
-      click(window, row);
+      clickOpenDiff(window, row);
       expect(posted.filter((m: any) => m.type === "openDiff").pop()).toMatchObject({
         oldText: v0,
         newText: v3,
@@ -131,7 +137,7 @@ describe("turn-level file change summary", () => {
       const row = rowByPath(doc, /note\.txt/)!;
       expect(row.querySelector(".diff-stat-add")!.textContent).toBe("+1");
       expect(row.querySelector(".diff-stat-del")!.textContent).toBe("−1");
-      click(window, row);
+      clickOpenDiff(window, row);
       expect(posted.filter((m: any) => m.type === "openDiff").pop()).toMatchObject({
         oldText: before,
         newText: after,
@@ -175,7 +181,7 @@ describe("turn-level file change summary", () => {
       // +1, then +1−1, then −1 → +2 −2
       expect(row.querySelector(".diff-stat-add")!.textContent).toBe("+2");
       expect(row.querySelector(".diff-stat-del")!.textContent).toBe("−2");
-      click(window, row);
+      clickOpenDiff(window, row);
       expect(posted.filter((m: any) => m.type === "openDiff").pop()).toMatchObject({
         oldText: v0,
         newText: v3,
@@ -288,7 +294,7 @@ describe("turn-level file change summary", () => {
       expect(rows[0].classList.contains("is-deleted")).toBe(false);
       // create +2, append +1 → +3 (pre-delete edit wiped)
       expect(rows[0].querySelector(".diff-stat-add")!.textContent).toBe("+3");
-      click(window, rows[0]);
+      clickOpenDiff(window, rows[0]);
       expect(posted.filter((m: any) => m.type === "openDiff").pop()).toMatchObject({
         oldText: "",
         newText: "brand\nnew\nplus",
@@ -400,7 +406,7 @@ describe("turn-level file change summary", () => {
 
     const row = rowByPath(doc, /multi\.txt/)!;
     expect(row.querySelector(".diff-stat-add")!.textContent).toBe("+2");
-    click(window, row);
+    clickOpenDiff(window, row);
     expect(posted.filter((m: any) => m.type === "openDiff").pop()).toMatchObject({
       oldText: "",
       newText: "one\ntwo",
@@ -416,5 +422,69 @@ describe("turn-level file change summary", () => {
     });
     dispatch(window, { type: "agentEnd" });
     expect(doc.querySelector(".turn-diff-summary")).toBeNull();
+  });
+
+  describe("host baselines (View deleted / Undo)", () => {
+    it("shows Undo all + per-file Undo when turnBaselines arrives", () => {
+      const { window, doc, posted } = bootWebview();
+      dispatch(window, { type: "agentStart", turnId: 7 });
+      dispatch(window, editCall("e1", "a.ts"));
+      dispatch(window, editUpdate("e1", "a.ts", "x", "y"));
+      dispatch(window, {
+        type: "turnBaselines",
+        turnId: 7,
+        files: [{ path: "a.ts", kind: "content" }],
+      });
+      dispatch(window, { type: "agentEnd" });
+
+      const card = doc.querySelector(".turn-diff-summary")!;
+      expect(card.dataset.turnId).toBe("7");
+      const undoAll = [...card.querySelectorAll(".turn-diff-action")].find(
+        (b) => b.textContent === "Undo all",
+      ) as HTMLButtonElement;
+      expect(undoAll).toBeTruthy();
+      click(window, undoAll);
+      expect(posted.filter((m: any) => m.type === "undoTurnFiles")).toEqual([
+        { type: "undoTurnFiles", turnId: 7 },
+      ]);
+
+      const rowUndo = [...card.querySelectorAll(".turn-diff-file .turn-diff-action")].find(
+        (b) => b.textContent === "Undo",
+      ) as HTMLButtonElement;
+      expect(rowUndo).toBeTruthy();
+      click(window, rowUndo);
+      expect(posted.filter((m: any) => m.type === "undoTurnFiles" && m.paths)).toEqual([
+        { type: "undoTurnFiles", turnId: 7, paths: ["a.ts"] },
+      ]);
+    });
+
+    it("shows View on deleted rows when baseline has content", () => {
+      const { window, doc, posted } = bootWebview();
+      dispatch(window, { type: "agentStart", turnId: 3 });
+      dispatch(window, {
+        type: "toolCall",
+        call: {
+          toolCallId: "d1",
+          kind: "execute",
+          title: "Shell",
+          rawInput: { command: "Remove-Item 'gone.txt'" },
+        },
+      });
+      dispatch(window, {
+        type: "turnBaselines",
+        turnId: 3,
+        files: [{ path: "gone.txt", kind: "content" }],
+      });
+      dispatch(window, { type: "agentEnd" });
+
+      const view = [...doc.querySelectorAll(".turn-diff-action")].find(
+        (b) => b.textContent === "View",
+      ) as HTMLButtonElement;
+      expect(view).toBeTruthy();
+      click(window, view);
+      expect(posted.filter((m: any) => m.type === "viewTurnBaseline")).toEqual([
+        { type: "viewTurnBaseline", turnId: 3, path: "gone.txt" },
+      ]);
+    });
   });
 });
